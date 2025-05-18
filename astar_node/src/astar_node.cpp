@@ -14,6 +14,7 @@ struct Node {
     struct Hash {
         size_t operator()(const Node& n) const {
             return std::hash<int>()(n.x ^ (n.y << 16));
+            // return std::hash<std::string>()(std::to_string(n.x) + std::to_string(n.y));
         }
     };
 };
@@ -80,12 +81,13 @@ std::vector<std::pair<int, int>> aStar(
         int nx = current.x + dx[i];
         int ny = current.y + dy[i];
 
-        if (nx >= 0 && nx < rows && ny >= 0 && ny < cols && grid[nx][ny] == 0) {
+        if (nx >= 0 && nx < rows && ny >= 0 && ny < cols && grid[nx][ny] != 0) {
           Node neighbor{nx, ny, current.g + 1, heuristic({nx, ny}, {goal.first, goal.second})};
           if (closedList.find(neighbor) != closedList.end()) {
             continue;
           } else {
             openList.push(neighbor);
+            // printf("open list push (%d, %d)\n", nx, ny);
             cameFrom[nx][ny] = current;
             searching_process.searched_nodes.push_back({nx, ny});
           }
@@ -97,17 +99,18 @@ std::vector<std::pair<int, int>> aStar(
 }
 
 void visualizePath(const std::vector<std::vector<int>>& grid,
-  const std::vector<std::pair<int, int>>& path, const int cellSize,
+  const std::vector<std::pair<int, int>>& path,
   const SearchingProcess& searching_process) {
     int rows = grid.size();
     int cols = grid[0].size();
+    int cellSize = std::min(1920 / rows, 1080 / cols);
     cv::Mat image(rows * cellSize, cols * cellSize, CV_8UC3, cv::Scalar(255, 255, 255));
 
     // Draw grid
     for (int x = 0; x < rows; ++x) {
       for (int y = 0; y < cols; ++y) {
         cv::Rect rect(y * cellSize, x * cellSize, cellSize, cellSize);
-        if (grid[x][y] == 1)
+        if (grid[x][y] == 0)
             cv::rectangle(image, rect, cv::Scalar(0, 0, 0), -1); // Obstacle (black)
         else
             cv::rectangle(image, rect, cv::Scalar(200, 200, 200), 1); // Free space (gray border)
@@ -123,9 +126,9 @@ void visualizePath(const std::vector<std::vector<int>>& grid,
     for (size_t search_idx = 0; search_idx < searching_process.searched_nodes.size(); search_idx++) {
       std::string text = std::to_string(search_idx + 1);
       cv::putText(image, text,
-        cv::Point(searching_process.searched_nodes[search_idx].second * cellSize + cellSize / 8,
-          searching_process.searched_nodes[search_idx].first * cellSize + cellSize / 2),
-        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+        cv::Point(searching_process.searched_nodes[search_idx].second * cellSize + cellSize * 0.05,
+          searching_process.searched_nodes[search_idx].first * cellSize + cellSize * 0.75),
+        cv::FONT_HERSHEY_SIMPLEX, 0.02 * cellSize, cv::Scalar(0, 255, 0), 1);
     }
 
     // Show image
@@ -133,30 +136,61 @@ void visualizePath(const std::vector<std::vector<int>>& grid,
     cv::waitKey(0);
 }
 
-int main() {
-    // Example grid: 0 = free cell, 1 = obstacle
-    std::vector<std::vector<int>> grid = {
-        {0, 0, 0, 1, 0},
-        {0, 1, 1, 1, 0},
-        {0, 0, 0, 1, 0},
-        {0, 1, 0, 0, 0},
-        {0, 0, 0, 1, 0}
-    };
+int main(int argc, char ** argv) {
+    std::string usage = "Usage: ./bin [row] [col] [try count]\n";
+    printf("%s\n", usage.data());
 
-    int idx_end_x = grid.size() - 1;
-    int idx_end_y = grid.at(0).size() - 1;
-    SearchingProcess searching_process;
-    auto path = aStar(grid, {0, 0}, {idx_end_x, idx_end_y}, searching_process);
+    int row = 10;
+    int col = 30;
+    int try_count = 50;
 
-    int cellSize = 50;
-    if (!path.empty()) {
-      std::cout << "Path found:\n";
-      for (const auto& p : path) {
-          std::cout << "(" << p.first << ", " << p.second << ")\n";
+    if (argc >= 3)  {
+      row = atoi(argv[1]);
+      col = atoi(argv[2]);
+      if (argc == 4) {
+        try_count = atoi(argv[3]);
       }
-      visualizePath(grid, path, cellSize, searching_process);
     } else {
+      // printf("%s\n", usage.data());
+      // return -1;
+    }
+    if (row > 0 && row <= 1000 && col > 0 && col <= 1000 && try_count > 0 && try_count <= 100) {
+      printf("row: %d, col: %d, try_count: %d\n", row, col, try_count);
+    } else {
+      printf("Invalid inputs. row: %d, col: %d, try_count: %d\n", row, col, try_count);
+      return -1;
+    }
+    
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    while (try_count-- > 0) {
+      printf("try_count left: %d\n", try_count);
+      std::vector<std::vector<int>> grid;
+      // 生成随机数作为地图
+      for (int i = 0; i < row; i++) {
+        std::vector<int> temp;
+        for (int j = 0; j < col; j++) {
+          temp.push_back(std::rand() % (std::max(5, std::min(row, col) / 8)));
+        }
+        grid.push_back(temp);
+      }
+
+      int idx_end_x = grid.size() - 1;
+      int idx_end_y = grid.at(0).size() - 1;
+      
+      // 0 is obstacle, others are free
+      grid[0][0] = 1;
+      grid[idx_end_x][idx_end_y] = 1;
+
+      SearchingProcess searching_process;
+      auto path = aStar(grid, {0, 0}, {idx_end_x, idx_end_y}, searching_process);
+      if (!path.empty()) {
+        visualizePath(grid, path, searching_process);
+        return 0;
+      } else {
         std::cout << "No path found.\n";
+        continue;
+      }
     }
 
     return 0;
