@@ -1,6 +1,6 @@
 # `A star` planning algorithm demo
 
-![](./imgs/astar_planning.png)
+![](./imgs/astar_planning.gif)
 
 1. An `A*` pathfinding algorithm compiled and run using ROS2.
 

@@ -36,9 +36,16 @@ std::vector<std::pair<int, int>> aStar(
     std::pair<int, int> goal,
     SearchingProcess &searching_process
 ) {
-    std::cout << "start: " << start.first << ", " << start.second
+    std::cout << "Run a star, start: " << start.first << ", " << start.second
     << ", goal: " << goal.first << ", " << goal.second
     << "\n";
+
+    int rows = grid.size();
+    int cols = grid[0].size();
+    std::vector<std::vector<Node>> cameFrom(rows, std::vector<Node>(cols));
+
+    int cellSize = std::min(1920 / rows, 1080 / cols);
+    cv::Mat image(rows * cellSize, cols * cellSize, CV_8UC3, cv::Scalar(255, 255, 255));
 
     std::priority_queue< Node, std::vector<Node>,
         std::function<bool(const Node&, const Node&)> > openList(
@@ -51,9 +58,41 @@ std::vector<std::pair<int, int>> aStar(
     Node startNode{start.first, start.second, 0, 0};
     openList.push(startNode);
 
-    int rows = grid.size();
-    int cols = grid[0].size();
-    std::vector<std::vector<Node>> cameFrom(rows, std::vector<Node>(cols));
+    {
+      cv::Point center(start.second * cellSize + cellSize / 2,
+        start.first * cellSize + cellSize / 2);
+      cv::circle(image, center, cellSize / 4, cv::Scalar(0, 0, 255), -1); // Path (red)
+    }
+    {
+      cv::Point center(goal.second * cellSize + cellSize / 2,
+        goal.first * cellSize + cellSize / 2);
+      cv::circle(image, center, cellSize / 4, cv::Scalar(0, 0, 255), -1); // Path (red)
+    }
+
+    // Draw grid
+    for (int x = 0; x < rows; ++x) {
+      for (int y = 0; y < cols; ++y) {
+        cv::Rect rect(y * cellSize, x * cellSize, cellSize, cellSize);
+        if (grid[x][y] == 0)
+            cv::rectangle(image, rect, cv::Scalar(0, 0, 0), -1); // Obstacle (black)
+        else
+            cv::rectangle(image, rect, cv::Scalar(200, 200, 200), 1); // Free space (gray border)
+      }
+    }
+
+    std::string status = "Press SPACE to start planning, ESC to exit";
+    cv::putText(image, status, cv::Point(cellSize * 0.1, cellSize * 0.5), 
+                cv::FONT_HERSHEY_SIMPLEX, 0.02 * cellSize, cv::Scalar(255, 0, 255), 2);
+
+    while (true) {
+      cv::imshow("A* Path", image);
+      int key = cv::waitKey(10);
+      if (key == 27) {  // ESC键退出
+          return std::vector<std::pair<int, int>>{};
+      } else if (key == 32) {  // 空格键开始规划
+          break;
+      }
+    }
 
     // For neighbors exploration
     int dx[] = {-1, 0, 1, 0};
@@ -68,10 +107,24 @@ std::vector<std::pair<int, int>> aStar(
         std::vector<std::pair<int, int>> path;
         while (current.x != startNode.x || current.y != startNode.y) {
             path.emplace_back(current.x, current.y);
+        
+            cv::Point center(current.y * cellSize + cellSize / 2,
+              current.x * cellSize + cellSize / 2);
+            cv::circle(image, center, cellSize / 4, cv::Scalar(0, 0, 255), -1); // Path (red)
+            cv::imshow("A* Path", image);
+            cv::waitKey(20);
+
             current = cameFrom[current.x][current.y];
         }
         path.emplace_back(startNode.x, startNode.y);
+        cv::Point center(startNode.y * cellSize + cellSize / 2,
+          startNode.x * cellSize + cellSize / 2);
+        cv::circle(image, center, cellSize / 4, cv::Scalar(0, 0, 255), -1); // Path (red)
+        cv::imshow("A* Path", image);
+        cv::waitKey(5);
+
         std::reverse(path.begin(), path.end());
+        printf("Searching success, path size: %ld\n", path.size());
         return path;
       }
 
@@ -90,6 +143,15 @@ std::vector<std::pair<int, int>> aStar(
             // printf("open list push (%d, %d)\n", nx, ny);
             cameFrom[nx][ny] = current;
             searching_process.searched_nodes.push_back({nx, ny});
+
+            static int search_idx = 1;
+            std::string text = std::to_string(search_idx++);
+            cv::putText(image, text,
+              cv::Point(ny * cellSize + cellSize * 0.05,
+              nx * cellSize + cellSize * 0.75),
+              cv::FONT_HERSHEY_SIMPLEX, 0.02 * cellSize, cv::Scalar(0, 255, 0), 1);
+            cv::imshow("A* Path", image);
+            cv::waitKey(5);
           }
         }
       }
@@ -183,9 +245,10 @@ int main(int argc, char ** argv) {
       grid[idx_end_x][idx_end_y] = 1;
 
       SearchingProcess searching_process;
-      auto path = aStar(grid, {0, 0}, {idx_end_x, idx_end_y}, searching_process);
+      auto path = aStar(grid, {0, 0}, {idx_end_x, idx_end_y},
+        searching_process);
       if (!path.empty()) {
-        visualizePath(grid, path, searching_process);
+        cv::waitKey(0);
         return 0;
       } else {
         std::cout << "No path found.\n";
