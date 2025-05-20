@@ -7,6 +7,8 @@
 #include <memory>
 #include <thread>
 
+#include "rclcpp/rclcpp.hpp"
+
 // 定义二维点结构
 struct Point {
     double x, y;
@@ -14,30 +16,50 @@ struct Point {
 };
 
 // 定义树节点
-struct Node {
+struct TreeNode {
     Point position;
-    std::shared_ptr<Node> parent;
-    Node(Point pos, std::shared_ptr<Node> p = nullptr) : position(pos), parent(p) {}
+    std::shared_ptr<TreeNode> parent;
+    TreeNode(Point pos, std::shared_ptr<TreeNode> p = nullptr) : position(pos), parent(p) {}
 };
 
 // RRT规划器类
-class RRTPlanner {
+class RRTPlanner : public rclcpp::Node {
+public:
+  RRTPlanner(int width_, int height_, Point start_, Point goal_, std::string node_name = "rrt_node") 
+      : rclcpp::Node(node_name) {
+    width = width_;
+    height = height_;
+    start = start_;
+    goal = goal_;
+
+    vis_interval = this->declare_parameter("vis_interval", 10);
+    stepSize = this->declare_parameter("stepSize", stepSize);
+    
+    RCLCPP_WARN(this->get_logger(),
+      "\n vis_interval(step mode is activatied if <=0): %d ms "\
+      "\n stepSize: %.2f",
+      vis_interval, stepSize);
+
+    tree.push_back(std::make_shared<TreeNode>(start));
+    std::srand(std::time(nullptr));
+  }
+
+  ~RRTPlanner() {
+    cv::destroyAllWindows();
+  }
+  
 private:
-    std::vector<std::shared_ptr<Node>> tree;
+    int width = 800;
+    int height = 600;
+    std::vector<std::shared_ptr<TreeNode>> tree;
     Point start, goal;
     std::vector<cv::Rect> obstacles;
-    double stepSize;
-    double goalBias;
-    int maxIterations;
-    int width, height;
-    
-public:
-    RRTPlanner(Point s, Point g, double step, double bias, int iter, int w, int h) 
-        : start(s), goal(g), stepSize(step), goalBias(bias), maxIterations(iter), width(w), height(h) {
-        tree.push_back(std::make_shared<Node>(start));
-        std::srand(std::time(nullptr));
-    }
-    
+    double stepSize = 10;
+    double goalBias = 0.05;
+    int maxIterations = 5000;
+    int vis_interval = 10;
+
+public:  
     // 添加障碍物
     void addObstacle(cv::Rect obstacle) {
         obstacles.push_back(obstacle);
@@ -77,8 +99,8 @@ public:
     }
     
     // 找到树中距离给定点最近的节点
-    std::shared_ptr<Node> findNearestNode(Point p) {
-        std::shared_ptr<Node> nearest = tree[0];
+    std::shared_ptr<TreeNode> findNearestNode(Point p) {
+        std::shared_ptr<TreeNode> nearest = tree[0];
         double minDist = std::sqrt(std::pow(p.x - nearest->position.x, 2) + 
                                    std::pow(p.y - nearest->position.y, 2));
         
@@ -94,7 +116,7 @@ public:
     }
     
     // 从nearest向random扩展一步
-    Point extend(std::shared_ptr<Node> nearest, Point random) {
+    Point extend(std::shared_ptr<TreeNode> nearest, Point random) {
         double dist = std::sqrt(std::pow(random.x - nearest->position.x, 2) + 
                                std::pow(random.y - nearest->position.y, 2));
         
@@ -108,7 +130,7 @@ public:
     }
     
     // 检查是否达到目标
-    bool reachedGoal(std::shared_ptr<Node> node) {
+    bool reachedGoal(std::shared_ptr<TreeNode> node) {
         double dist = std::sqrt(std::pow(node->position.x - goal.x, 2) + 
                                std::pow(node->position.y - goal.y, 2));
         return dist <= stepSize;
@@ -116,34 +138,67 @@ public:
     
     // 执行RRT规划
     std::vector<Point> plan(cv::Mat& image) {
-        for (int i = 0; i < maxIterations; ++i) {
-            Point random = getRandomPoint();
-            std::shared_ptr<Node> nearest = findNearestNode(random);
-            Point newPoint = extend(nearest, random);
-            
-            if (!isInObstacle(newPoint) && !checkLineCollision(nearest->position, newPoint)) {
-                auto newNode = std::make_shared<Node>(newPoint, nearest);
-                tree.push_back(newNode);
+        bool planningContinued = true;
+        int vis_interval_ms = vis_interval;
+        bool step_mode = false;
+        if (vis_interval <= 0) {
+            step_mode = true;
+            vis_interval_ms = 10;
+            RCLCPP_WARN(rclcpp::get_logger("rrt_node"),
+              "Input vis_interval is %d, step mode enabled. Press SPACE to continue", vis_interval);
+        }
 
-                cv::circle(image, cv::Point(newPoint.x, newPoint.y), 4, cv::Scalar(255, 255, 0), -1);
-                
-                cv::line(image, 
-                         cv::Point(newPoint.x, newPoint.y),
-                         cv::Point(nearest->position.x, nearest->position.y),
-                         cv::Scalar(255, 0, 255), 2);
-                cv::imshow("RRT Path Planning", image);
-                cv::waitKey(10);
+        int iter = 0;
+        while (rclcpp::ok()) {
+          if (iter >= maxIterations) {
+            break;
+          }
 
-                if (reachedGoal(newNode)) {
-                    std::cout << "Goal reached after " << i << " iterations!" << std::endl;
-                    return buildPath(newNode);
-                }
-            }
+          int key = cv::waitKey(vis_interval_ms);
+          if (key == 27) {  // ESC键退出
+              break;
+          } else if (key == 32) {  // 空格键
+              planningContinued = !planningContinued;
+          } 
+          if (!planningContinued) {
+              continue;
+          }
+          iter++;
+          Point random = getRandomPoint();
+          std::shared_ptr<TreeNode> nearest = findNearestNode(random);
+          Point newPoint = extend(nearest, random);
+          
+          cv::circle(image, cv::Point(random.x, random.y), 3, cv::Scalar(0, 0, 255), -1);
+          cv::circle(image, cv::Point(nearest->position.x, nearest->position.y), 3, cv::Scalar(255, 255, 255), -1);
+          // cv::circle(image, cv::Point(newPoint.x, newPoint.y), 3, cv::Scalar(255, 255, 0), -1);
+          
+          cv::imshow("RRT Path Planning", image);
+
+          if (step_mode) {
+            planningContinued = false;
+          }
+          
+          if (!isInObstacle(newPoint) && !checkLineCollision(nearest->position, newPoint)) {
+              auto newNode = std::make_shared<TreeNode>(newPoint, nearest);
+              tree.push_back(newNode);
+
+              cv::circle(image, cv::Point(newPoint.x, newPoint.y), 4, cv::Scalar(255, 255, 0), -1);
+              cv::line(image, 
+                        cv::Point(newPoint.x, newPoint.y),
+                        cv::Point(nearest->position.x, nearest->position.y),
+                        cv::Scalar(255, 0, 255), 2);
+              cv::imshow("RRT Path Planning", image);
+
+              if (reachedGoal(newNode)) {
+                  std::cout << "Goal reached after " << iter << " iterations!" << std::endl;
+                  return buildPath(newNode);
+              }
+          }
         }
         
         std::cout << "Failed to reach goal after " << maxIterations << " iterations." << std::endl;
         // 返回最近的路径
-        std::shared_ptr<Node> nearestToGoal = tree[0];
+        std::shared_ptr<TreeNode> nearestToGoal = tree[0];
         double minDist = std::sqrt(std::pow(goal.x - tree[0]->position.x, 2) + 
                                   std::pow(goal.y - tree[0]->position.y, 2));
         
@@ -160,9 +215,9 @@ public:
     }
     
     // 构建从起点到指定节点的路径
-    std::vector<Point> buildPath(std::shared_ptr<Node> node) {
+    std::vector<Point> buildPath(std::shared_ptr<TreeNode> node) {
         std::vector<Point> path;
-        std::shared_ptr<Node> current = node;
+        std::shared_ptr<TreeNode> current = node;
         
         while (current != nullptr) {
             path.push_back(current->position);
@@ -175,80 +230,83 @@ public:
     }
     
     // 获取树的所有节点
-    const std::vector<std::shared_ptr<Node>>& getTree() const {
+    const std::vector<std::shared_ptr<TreeNode>>& getTree() const {
         return tree;
     }
 };
 
-int main() {
+int main(int argc, char** argv) {
+    rclcpp::init(argc, argv);
+    
     // 初始化窗口
     const int width = 800;
     const int height = 600;
     cv::Mat image = cv::Mat::zeros(height, width, CV_8UC3);
+    // 清空图像
+    image = cv::Scalar(0, 0, 0);
     
-    // 初始化RRT规划器
+    // 创建窗口
+    // 使窗口可调整大小
+    cv::namedWindow("RRT Path Planning", cv::WINDOW_NORMAL);
+    // 调整窗口大小
+    cv::resizeWindow("RRT Path Planning", width, height);
+    
+    // 定义起点和目标点
     Point start(50, height/2);
     Point goal(width - 50, height/2);
-    RRTPlanner planner(start, goal, 10.0, 0.05, 5000, width, height);
     
+    // 定义障碍物
+    std::vector<cv::Rect> obstacles {
+      cv::Rect(300, 200, 200, 50),
+      cv::Rect(450, 300, 50, 150),
+      cv::Rect(200, 400, 150, 50)
+    };
+
+    // 初始化RRT规划器
+    RRTPlanner planner(width, height, start, goal);
+
     // 添加障碍物
-    planner.addObstacle(cv::Rect(300, 200, 200, 50));
-    planner.addObstacle(cv::Rect(450, 300, 50, 150));
-    planner.addObstacle(cv::Rect(200, 400, 150, 50));
+    for (auto& obs : obstacles) {
+        planner.addObstacle(obs);
+    }
+    
+    // 绘制起点和终点
+    cv::circle(image, cv::Point(start.x, start.y), 8, cv::Scalar(0, 255, 0), -1);
+    cv::circle(image, cv::Point(goal.x, goal.y), 8, cv::Scalar(255, 0, 0), -1);
+    
+    // 绘制障碍物
+    for (auto& obs : obstacles) {
+        cv::rectangle(image, obs, cv::Scalar(0, 0, 128), -1);
+    }
+    
+    // 显示状态文本
+    std::string status = "Press SPACE to start/pause planning, ESC to exit";
+    cv::putText(image, status, cv::Point(10, 30), 
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
     
     // 路径规划标志
     bool planningStarted = false;
     bool planningFinished = false;
     std::vector<Point> path;
     
-    // 创建窗口
-    cv::namedWindow("RRT Path Planning", cv::WINDOW_NORMAL);
-    cv::resizeWindow("RRT Path Planning", width, height);
-    
-    // 清空图像
-    image = cv::Scalar(0, 0, 0);
-    
-    cv::rectangle(image, cv::Rect(300, 200, 200, 50), cv::Scalar(0, 0, 255), -1);
-    cv::rectangle(image, cv::Rect(450, 300, 50, 150), cv::Scalar(0, 0, 255), -1);
-    cv::rectangle(image, cv::Rect(200, 400, 150, 50), cv::Scalar(0, 0, 255), -1);
-    
-    // 显示状态文本
-    std::string status = "Press SPACE to start planning, ESC to exit";
-    cv::putText(image, status, cv::Point(10, 30), 
-                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
-    
     // 主循环
-    while (true) {
-        // 绘制起点和终点
-        cv::circle(image, cv::Point(start.x, start.y), 8, cv::Scalar(0, 255, 0), -1);
-        cv::circle(image, cv::Point(goal.x, goal.y), 8, cv::Scalar(255, 0, 0), -1);
-        
-        // 绘制树
-        // const auto& tree = planner.getTree();
-        // for (size_t i = 1; i < tree.size(); ++i) {
-        //     if (tree[i]->parent) {
-        //         cv::line(image, 
-        //                  cv::Point(tree[i]->position.x, tree[i]->position.y),
-        //                  cv::Point(tree[i]->parent->position.x, tree[i]->parent->position.y),
-        //                  cv::Scalar(255, 255, 0), 1);
-        //     }
-        // }
-        
+    while (rclcpp::ok()) {
         // 执行规划
         if (planningStarted && !planningFinished) {
-            path = planner.plan(image);
-            planningFinished = true;
-            std::cout << "Planning complete!" << std::endl;
-        }
-        
-        // 绘制路径
-        if (planningFinished && !path.empty()) {
+          path = planner.plan(image);
+          planningFinished = true;
+          // 绘制路径
+          if (!path.empty()) {
             for (size_t i = 0; i < path.size() - 1; ++i) {
-                cv::line(image, 
-                         cv::Point(path[i].x, path[i].y),
-                         cv::Point(path[i+1].x, path[i+1].y),
-                         cv::Scalar(0, 255, 255), 2);
+              cv::line(image, 
+                      cv::Point(path[i].x, path[i].y),
+                      cv::Point(path[i+1].x, path[i+1].y),
+                      cv::Scalar(0, 255, 255), 2);
+              cv::imshow("RRT Path Planning", image);
+              cv::waitKey(10);
             }
+          }
+          std::cout << "Planning complete!" << std::endl;
         }
         
         // 显示图像
@@ -262,5 +320,7 @@ int main() {
             planningStarted = true;
         }
     }
+
+    rclcpp::shutdown();
     return 0;
 }    
