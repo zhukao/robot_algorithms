@@ -149,6 +149,7 @@ public:
         }
 
         int iter = 0;
+        std::shared_ptr<cv::Point> last_random_pt = nullptr;
         while (rclcpp::ok()) {
           if (iter >= maxIterations) {
             break;
@@ -156,7 +157,7 @@ public:
 
           int key = cv::waitKey(vis_interval_ms);
           if (key == 27) {  // ESC键退出
-              break;
+              rclcpp::shutdown();
           } else if (key == 32) {  // 空格键
               planningContinued = !planningContinued;
           } 
@@ -169,6 +170,13 @@ public:
           Point newPoint = extend(nearest, random);
           
           cv::circle(image, cv::Point(random.x, random.y), 3, cv::Scalar(0, 0, 255), -1);
+          if (!last_random_pt) {
+            last_random_pt = std::make_shared<cv::Point>(random.x, random.y);
+          } else {
+            cv::circle(image, *last_random_pt, 3, cv::Scalar(0, 0, 128), -1);
+            last_random_pt->x = random.x;
+            last_random_pt->y = random.y;
+          }
           cv::circle(image, cv::Point(nearest->position.x, nearest->position.y), 3, cv::Scalar(255, 255, 255), -1);
           // cv::circle(image, cv::Point(newPoint.x, newPoint.y), 3, cv::Scalar(255, 255, 0), -1);
           
@@ -276,7 +284,7 @@ int main(int argc, char** argv) {
     
     // 绘制障碍物
     for (auto& obs : obstacles) {
-        cv::rectangle(image, obs, cv::Scalar(0, 0, 128), -1);
+        cv::rectangle(image, obs, cv::Scalar(0, 0, 64), -1);
     }
     
     // 显示状态文本
@@ -315,7 +323,7 @@ int main(int argc, char** argv) {
         // 处理按键事件
         int key = cv::waitKey(10);
         if (key == 27) {  // ESC键退出
-            break;
+            rclcpp::shutdown();
         } else if (key == 32 && !planningStarted) {  // 空格键开始规划
             planningStarted = true;
         }
